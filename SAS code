@@ -1,0 +1,257 @@
+libname proj 'H:/laundry';
+
+DATA proj.laundry_data_g;
+infile "H:\laundry\laundet_groc_1114_1165" missover firstobs=2;
+input IRI_KEY WEEK SY GE VEND  ITEM  UNITS DOLLARS  F$    D PR;
+datalines;
+run;
+data proj.laundry_g;
+set proj.laundry_data_g;
+type = "GR";
+run;
+DATA proj.laundry_data_d;
+infile "H:\laundry\laundet_drug_1114_1165" missover firstobs=2;
+input IRI_KEY WEEK SY GE VEND  ITEM  UNITS DOLLARS  F$    D PR;
+datalines;
+run;
+data proj.laundry_d;
+set proj.laundry_data_d;
+type = "DR";
+run;
+
+data proj.laundry_data;
+set proj.laundry_g proj.laundry_d;
+run;
+
+
+
+proc import out = proj.brand datafile = 'H:\laundry\prod_laundet.xls' dbms=EXCEL REPLACE;
+getnames=YES; mixed=YES; scantext=YES; run;
+proc contents data = proj.laundry_data; run;
+
+proc contents data = proj.brand; run;
+data proj.brand;
+set proj.brand;
+length colupc $13;
+colupc=put(input(sy,2.),z2.)||put(input(ge,2.),z1.)||put(input(vend,5.),z5.)||put(input(item,5.),z5.);
+colupc_num = input(colupc,13.);
+run;
+
+proc print data=proj.brand (obs=20); run;
+/*
+DATA mapping_new;
+set mapping;
+num_sy = input(SY,2.);
+num_ge = input(GE,2.);
+num_vend = input(VEND,5.);
+num_item = input(ITEM,5.);run;
+*/
+
+data proj.laundry_data_upc;
+  set proj.laundry_data;
+  length upc $17;
+  upc=put(sy,z2.)||'-'||put(ge,z2.)||'-'||put(vend,z5.)||'-'||put(item,z5.);
+run;
+
+
+proc sql; 
+  create table proj.laundry_master as 
+  select  *
+  from    proj.laundry_data_upc P
+  inner join proj.brand B
+  on      P.UPC = B.UPC ;
+  
+quit;
+
+data proj.laundry_master;
+set proj.laundry_master;
+tot_vol_eq = units* vol_eq;
+per_unit_cost = dollars/ tot_vol_eq;
+run;
+
+data proj.laundry_all_liquid;
+set proj.laundry_master;
+tot_vol_eq = units* vol_eq;
+per_unit_cost = dollars/ tot_vol_eq;
+where L5 = 'ALL' and L3 = "UNILEVER" and FORM = "LIQUID";
+run;
+
+proc means data=proj.laundry_master NMISS N; run;
+
+proc sort data=proj.laundry_master;
+   by type L2 L3 L5;
+run;
+/* optional step */
+proc surveyselect data=proj.laundry_master n=1000000
+                  out=proj.laundry_master_sample;
+   strata type L2 L3 L5 / alloc=prop nosample;
+run;
+
+proc surveyselect data=proj.laundry_master method=srs n=proj.laundry_master_sample
+                  seed=1953 out=proj.laundry_sample;
+   strata type L2 L3 L5;
+run;
+/* optional step end */
+
+
+DATA proj.delivery_stores;
+infile "H:\laundry\Delivery_Stores" missover firstobs=2;
+input IRI_KEY 1-7 OU$ 9-10 EST_ACV 12-19  Market_Name$ 21-44 Open 46-49 Clsd 51-54 MskdName$ 56-63;
+run;
+/* Delivery stores mapping */
+
+proc sql;
+create table proj.delivery_store_mapping as
+select *
+from proj.laundry_data L
+inner join proj.delivery_stores D
+on D.IRI_Key = L.IRI_Key;
+quit;
+
+/*not sure */
+proc sql;
+create table proj.laundry_all_panel_data as
+select iri_key,count(distinct WEEK) AS distinct_weeks from proj.laundry_all_liquid
+group by iri_key
+having distinct_weeks = 52;
+QUIT;
+/* not sure end */
+
+
+proc univariate data=proj.laundry_all_liquid; var per_unit_cost; run;
+
+data work.temp_laundry_all_data;
+set proj.laundry_all_liquid;
+keep iri_key week units dollars f d pr upc tot_vol_eq per_unit_cost FLAVOR_SCENT;
+run;
+proc freq data=work.temp_laundry_all_data; table f; run;
+proc freq data=work.temp_laundry_all_data; table d; run;
+proc freq data=work.temp_laundry_all_data; table pr; run;
+
+data work.temp_laundry_all_data;
+set work.temp_laundry_all_data;
+if f='NONE' then int_f=0; else int_f=1;
+if d='0' then int_d=0; else int_d=1;
+if pr='0' then int_pr=0; else int_pr=1; 
+if FLAVOR_SCENT = 'MISSING' then fla_mis = 1; else fla_mis = 0;
+if FLAVOR_SCENT = 'REGULAR' then fla_reg = 1; else fla_reg = 0;
+if FLAVOR_SCENT = 'UNSCENTED' then fla_u = 1; else fla_u = 0;
+if FLAVOR_SCENT = 'CITRUS BREEZE' OR FLAVOR_SCENT = 'CLEAN FRESH' then fla_sc = 1; else fla_sc = 0;
+
+keep iri_key week units dollars int_f int_d int_pr upc tot_vol_eq per_unit_cost fla_mis fla_reg fla_u fla_sc;
+run;
+/* adding panel data for analysis*/
+ 
+
+DATA work.laundry_panel_data_dr;
+infile "H:\laundry\laundet_PANEL_DR_1114_1165.dat" missover firstobs=2 delimiter='09'x ;
+input PANID 	 WEEK 	UNITS 	OUTLET$ 	DOLLARS 	IRI_KEY 	COLUPC ;
+datalines;
+run;
+
+proc print data= work.laundry_panel_data_dr(obs=10); run;
+
+DATA work.laundry_panel_data_gr;
+infile "H:\laundry\laundet_PANEL_GR_1114_1165.dat" missover firstobs=2 delimiter='09'x;
+input PANID	 WEEK	UNITS	OUTLET$	DOLLARS	IRI_KEY	COLUPC;
+run;
+data proj.laundry_panel_data_compiled;
+set work.laundry_panel_data_dr work.laundry_panel_data_gr;
+run;
+
+proc print data = proj.laundry_panel_data_compiled(obs=10); run;
+
+proc import out = proj.panelist_data datafile = 'H:\laundry\ads_demo3.csv' dbms=csv REPLACE;
+getnames=YES; run;
+
+proc print data = proj.panelist_data (obs=10); run;
+
+
+proc means data=proj.panelist_data NMISS N; run;
+/* no of misssess are of the columns which we are not interested in as smoking
+and caste distinction are the only variables having missing values */
+
+proc print data = proj.laundry_panel_data_compiled(obs=10); run;
+proc print data = proj.panelist_data(obs=10); run;
+proc print data = proj.laundry_master(obs=10); run;
+proc contents data = proj.laundry_panel_data_compiled; run;
+proc contents data = proj.laundry_master; run;
+proc contents data = proj.panelist_data; run;
+
+proc sql;
+create table proj.panelist_data_mapping as 
+select distinct PD.PANID, PD.WEEK, PD.UNITS, PD.OUTLET, PD.DOLLARS, PD.IRI_KEY, 
+PAN_D.panelist_type, PAN_D.Combined_Pre_Tax_Income_of_HH as tax_income,
+PAN_D.family_size, PAN_D.type_of_residential_possession, PAN_D.county, PAN_D.HH_age
+,pan_d.hh_edu, pan_d.HH_OCC,pan_d.children_group_code, pan_d.zipcode
+, pan_d.market_based_upon_zipcode, pan_d.iri_geography_number
+,LM.l3,lm.l5,lm.vol_eq,lm.form
+,DS.Market_Name, DS.MskdName
+from proj.laundry_panel_data_compiled PD
+inner join proj.panelist_data PAN_D
+on PD.PANID = PAN_D.Panelist_ID
+inner JOIN proj.brand LM
+on LM.colupc_num = PD.COLUPC
+left join proj.delivery_stores DS
+on DS.IRI_KEY = PD.IRI_KEY;
+quit;
+
+/* iri and week wise grouping of data */
+PROC PRINT DATA=proj.laundry_master(OBS=10); RUN;
+
+proc print data = panelist_data_mapping (obs=50); run;
+
+/* analysis code starts here */
+proc contents data=work.temp_laundry_all_data; run;
+
+proc sql;
+create table work.all_analysis_reg as
+select iri_key,week, sum(tot_vol_eq) as sum_tot_vol,sum(DOLLARS) as sum_dollars
+,avg(per_unit_cost) as avg_price,
+avg(int_f) as avg_w_feature,avg(int_d) as avg_w_display,avg(int_pr) as avg_w_promotion
+, 
+from work.temp_laundry_all_data
+group by iri_key,week; quit;
+
+proc print data = work.all_analysis_reg (obs = 30); run;
+
+
+/*Check for Non-Linearity*/
+proc sgplot data=work.all_analysis_reg; scatter x=avg_price y=sum_dollars; run;
+
+/*MULTICOLLINEARITY*/
+PROC CORR DATA=work.all_analysis_reg;
+RUN;
+
+
+PROC PANEL DATA = work.all_analysis_reg;
+ID IRI_KEY WEEK;       
+MODEL sum_tot_vol = avg_w_display avg_w_promotion avg_w_feature /FIXTWO RANTWO;    
+RUN;
+
+
+/* analysing what parameters of feature, display or pr affects the most on unit sales.*/
+
+/*Interaction Effect*/
+data work.all_analysis_reg2;
+set work.all_analysis_reg;
+WT_PRICESQ = sum_dollars * sum_dollars;
+INF_D =  avg_w_feature * avg_w_display;
+INF_P =  avg_w_feature * avg_w_promotion;
+IND_P = avg_w_display * avg_w_promotion;
+INF_D_P = avg_w_display *  avg_w_feature * avg_w_promotion;
+RUN;
+
+PROC PANEL DATA = work.all_analysis_reg2;
+ID IRI_KEY WEEK;       
+MODEL sum_tot_vol = avg_w_feature avg_w_display avg_w_promotion INF_D INF_P IND_P INF_D_P /FIXTWO RANTWO;    
+RUN;
+PROC SYSLIN 3SLS data = work.temp_laundry_all_data SIMPLE;
+
+ENDOGENOUS tot_vol_eq per_unit_cost;
+
+INSTRUMENTS  int_f int_d int_pr fla_mis fla_reg fla_u fla_sc ;
+model tot_vol_eq = per_unit_cost int_f int_d int_pr ;
+model per_unit_cost = tot_vol_eq int_f int_d int_pr fla_mis fla_reg fla_u fla_sc ;
+
+RUN;
